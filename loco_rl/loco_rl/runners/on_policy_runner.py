@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import statistics
 import time
@@ -23,8 +24,8 @@ class OnPolicyRunner:
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
-        self.alg_cfg = train_cfg["algorithm"]
-        self.policy_cfg = train_cfg["policy"]
+        self.alg_cfg = dict(train_cfg["algorithm"])
+        self.policy_cfg = dict(train_cfg["policy"])
         self.device = device
         self.env = env
 
@@ -39,9 +40,12 @@ class OnPolicyRunner:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
             num_critic_obs = num_obs
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
+
+        actor_critic_cfg = dict(self.policy_cfg)
+        actor_critic_class = eval(actor_critic_cfg.pop("class_name"))  # ActorCritic
+        actor_critic_cfg = self._filter_kwargs(actor_critic_class, actor_critic_cfg, "actor-critic")
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticEncoder |ActorCriticRNNEncoder | ActorCriticPreEncoderRNNEncoder = actor_critic_class(
-            num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+            num_obs, num_critic_obs, self.env.num_actions, **actor_critic_cfg
         ).to(self.device)
 
         # resolve dimension of rnd gated state
@@ -63,8 +67,10 @@ class OnPolicyRunner:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
         # init algorithm
-        alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        alg_cfg = dict(self.alg_cfg)
+        alg_class = eval(alg_cfg.pop("class_name"))  # PPO
+        alg_cfg = self._filter_kwargs(alg_class, alg_cfg, "algorithm")
+        self.alg: PPO = alg_class(actor_critic, device=self.device, **alg_cfg)
 
         # store training configuration
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -92,6 +98,22 @@ class OnPolicyRunner:
         self.tot_time = 0
         self.current_learning_iteration = 0
         self.git_status_repos = [loco_rl.__file__]
+
+    @staticmethod
+    def _filter_kwargs(target, kwargs: dict, target_name: str) -> dict:
+        """Drop config entries that are unsupported by the target constructor."""
+        signature = inspect.signature(target.__init__)
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return kwargs
+
+        valid_keys = {
+            name for name, param in signature.parameters.items()
+            if name != "self" and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        ignored_keys = sorted(set(kwargs) - valid_keys)
+        if ignored_keys:
+            print(f"[INFO] Ignoring unsupported {target_name} config keys: {ignored_keys}")
+        return {key: value for key, value in kwargs.items() if key in valid_keys}
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
         # initialize writer
