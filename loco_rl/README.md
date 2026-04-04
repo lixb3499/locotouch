@@ -110,3 +110,8 @@ If you use the library with symmetry augmentation, please cite:
   doi={10.1109/ICRA57147.2024.10611493}
 }
 ```
+
+# Two Demo
+```bash
+python locotouch/scripts/play_dual_dog_baseline.py --task Isaac-RandCylinderTransportStudent_SingleBinaryTac_CNNRNN_Mon-LocoTouch-Play-v1 --log_dir_distill=2025-09-02_23-27-14 --checkpoint_distill=model_7.pt --device cuda:1
+```

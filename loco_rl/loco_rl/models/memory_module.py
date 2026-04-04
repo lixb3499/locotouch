@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 class Memory(nn.Module):
@@ -14,6 +15,7 @@ class Memory(nn.Module):
         else:
             # inference mode (collection): use hidden states of last step
             out, self.hidden_states = self.rnn(input.unsqueeze(0), self.hidden_states)
+            self.hidden_states = self._ensure_mutable_hidden_states(self.hidden_states)
             out = out.squeeze(0)
         return out
     
@@ -23,10 +25,24 @@ class Memory(nn.Module):
             if dones is None:
                 self.hidden_states = None
             else:
+                self.hidden_states = self._ensure_mutable_hidden_states(self.hidden_states)
                 for state in self.hidden_states:
                     state[..., dones, :] = 0.0
 
+    def _ensure_mutable_hidden_states(self, hidden_states):
+        if hidden_states is None:
+            return None
+
+        with torch.inference_mode(False):
+            if isinstance(hidden_states, tuple):
+                return tuple(
+                    state.detach().clone() if state.is_inference() else state
+                    for state in hidden_states
+                )
+            if hidden_states.is_inference():
+                return hidden_states.detach().clone()
+        return hidden_states
+
     def get_hidden_states(self):
         return self.hidden_states
-
 
