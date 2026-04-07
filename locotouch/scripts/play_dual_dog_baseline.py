@@ -5,18 +5,25 @@ dual-robot transport task:
 
 - a long cylinder is spawned across two side-by-side robots
 - both robots receive the same shared velocity command
-- each robot builds the same proprioceptive observation used in single-dog locomotion
+- each robot builds the same teacher observation used by the source single-dog task
 - the same pretrained single-dog PPO policy is applied to both robots independently
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
 import cli_args
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 parser = argparse.ArgumentParser(description="Play a dual-dog transport baseline with a shared single-dog PPO policy.")
@@ -29,8 +36,8 @@ parser.add_argument(
 parser.add_argument(
     "--policy_task",
     type=str,
-    default="Isaac-Locomotion-LocoTouch-Play-v1",
-    help="Single-dog locomotion task whose PPO config/checkpoint will be loaded for both robots.",
+    default="Isaac-RandCylinderTransportTeacher-LocoTouch-Play-v1",
+    help="Single-dog source task whose PPO config/checkpoint will be loaded for both robots.",
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Unused compatibility flag. This script always uses one scene.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
@@ -109,7 +116,7 @@ def main():
         use_fabric=not args_cli.disable_fabric,
     )
     policy_obs_cfg = extract_policy_obs_cfg(policy_env_cfg)
-    command_cfg = extract_command_cfg(task_env_cfg, args_cli)
+    command_cfg = extract_command_cfg(policy_env_cfg, args_cli)
     control_decimation = int(task_env_cfg.decimation)
 
     scene_cfg = build_scene_cfg(
@@ -138,6 +145,7 @@ def main():
         "robot_right": scene["robot_right"],
     }
     payload = scene["payload"]
+    payload_contact_sensor = scene.sensors["payload_contact_sensor"]
     num_actions = robots["robot_left"].num_joints
     policy = make_policy(
         policy_obs_cfg,
@@ -249,7 +257,17 @@ def main():
 
         command = commanded_velocity(shared_command, warmup_steps_remaining)
         batch_obs = torch.cat(
-            [build_policy_obs(robot, obs_states[name], command, policy_obs_cfg) for name, robot in robots.items()],
+            [
+                build_policy_obs(
+                    robot,
+                    obs_states[name],
+                    command,
+                    policy_obs_cfg,
+                    payload=payload,
+                    payload_contact_sensor=payload_contact_sensor,
+                )
+                for name, robot in robots.items()
+            ],
             dim=0,
         )
 

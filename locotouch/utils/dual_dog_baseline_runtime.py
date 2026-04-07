@@ -4,13 +4,14 @@ import math
 import os
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 
 import cli_args
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab.utils.math import quat_from_euler_xyz
+from isaaclab.utils.math import quat_apply_inverse, quat_from_euler_xyz, quat_inv, quat_mul
 from isaaclab_tasks.utils import get_checkpoint_path
 
 
@@ -22,6 +23,11 @@ class PolicyObsCfg:
     raw_action_scale: float
     raw_action_clip_value: float
     clip_raw_actions: bool
+    include_object_state: bool
+    object_state_scale: tuple[float, ...] | None
+    object_state_non_contact_obs: tuple[float, ...] | None
+    object_state_last_contact_time_threshold: float
+    object_state_current_contact_time_threshold: float
 
 
 @dataclass
@@ -44,6 +50,7 @@ class RobotObsState:
     joint_pos_history: deque[torch.Tensor]
     joint_vel_history: deque[torch.Tensor]
     action_history: deque[torch.Tensor]
+    object_state_history: deque[torch.Tensor] | None
 
 
 class DummyPolicyEnv:
@@ -78,6 +85,25 @@ def extract_policy_obs_cfg(env_cfg) -> PolicyObsCfg:
         policy_obs_cfg.joint_vel.history_length,
         policy_obs_cfg.last_action.history_length,
     ]
+    include_object_state = hasattr(policy_obs_cfg, "object_state")
+    object_state_scale = None
+    object_state_non_contact_obs = None
+    object_state_last_contact_time_threshold = 0.0
+    object_state_current_contact_time_threshold = 0.0
+    if include_object_state:
+        history_lengths.append(policy_obs_cfg.object_state.history_length)
+        raw_object_state_scale = policy_obs_cfg.object_state.params.get("scale", [1.0] * 13)
+        if isinstance(raw_object_state_scale, (float, int)):
+            object_state_scale = tuple([float(raw_object_state_scale)] * 13)
+        else:
+            object_state_scale = tuple(raw_object_state_scale)
+        object_state_non_contact_obs = tuple(policy_obs_cfg.object_state.params.get("non_contact_obs", [0.0] * 13))
+        object_state_last_contact_time_threshold = float(
+            policy_obs_cfg.object_state.params.get("last_contact_time_threshold", 0.0)
+        )
+        object_state_current_contact_time_threshold = float(
+            policy_obs_cfg.object_state.params.get("current_contact_time_threshold", 0.0)
+        )
     if len(set(history_lengths)) != 1:
         raise ValueError(f"Expected identical observation history lengths, got {history_lengths}.")
 
@@ -89,6 +115,11 @@ def extract_policy_obs_cfg(env_cfg) -> PolicyObsCfg:
         raw_action_scale=action_cfg.raw_action_scale,
         raw_action_clip_value=action_cfg.raw_action_clip_value,
         clip_raw_actions=action_cfg.clip_raw_actions,
+        include_object_state=include_object_state,
+        object_state_scale=object_state_scale,
+        object_state_non_contact_obs=object_state_non_contact_obs,
+        object_state_last_contact_time_threshold=object_state_last_contact_time_threshold,
+        object_state_current_contact_time_threshold=object_state_current_contact_time_threshold,
     )
 
 
@@ -150,6 +181,7 @@ def create_obs_state(num_actions: int, history_length: int, device: torch.device
         joint_pos_history=deque([zeros_joint.clone() for _ in range(history_length)], maxlen=history_length),
         joint_vel_history=deque([zeros_joint.clone() for _ in range(history_length)], maxlen=history_length),
         action_history=deque([zeros_joint.clone() for _ in range(history_length)], maxlen=history_length),
+        object_state_history=None,
     )
 
 
@@ -158,7 +190,57 @@ def _roll_history(history: deque[torch.Tensor], value: torch.Tensor) -> torch.Te
     return torch.cat(list(history), dim=-1)
 
 
-def build_policy_obs(robot, obs_state: RobotObsState, command: torch.Tensor, obs_cfg: PolicyObsCfg) -> torch.Tensor:
+def _object_state_in_robot_frame(
+    robot,
+    payload,
+    payload_contact_sensor,
+    obs_cfg: PolicyObsCfg,
+) -> torch.Tensor:
+    robot_quat_w = robot.data.root_quat_w
+    pos_in_robot_frame = quat_apply_inverse(robot_quat_w, payload.data.root_pos_w - robot.data.root_pos_w)
+    lin_vel_in_robot_frame = quat_apply_inverse(robot_quat_w, payload.data.root_lin_vel_w - robot.data.root_lin_vel_w)
+    quat_in_robot_frame = quat_mul(quat_inv(robot_quat_w), payload.data.root_quat_w)
+    ang_vel_in_robot_frame = quat_apply_inverse(robot_quat_w, payload.data.root_ang_vel_w - robot.data.root_ang_vel_w)
+    object_state = torch.cat(
+        [pos_in_robot_frame, lin_vel_in_robot_frame, quat_in_robot_frame, ang_vel_in_robot_frame],
+        dim=-1,
+    )
+
+    if obs_cfg.object_state_scale is not None:
+        scale = torch.tensor(obs_cfg.object_state_scale, device=object_state.device, dtype=object_state.dtype)
+        object_state = object_state * scale
+
+    if payload_contact_sensor is None or obs_cfg.object_state_non_contact_obs is None:
+        return object_state
+
+    last_contact_time = payload_contact_sensor.data.last_contact_time.reshape(object_state.shape[0], -1)
+    current_contact_time = payload_contact_sensor.data.current_contact_time.reshape(object_state.shape[0], -1)
+    no_contact = torch.logical_and(
+        torch.max(last_contact_time, dim=1).values < obs_cfg.object_state_last_contact_time_threshold,
+        torch.max(current_contact_time, dim=1).values < obs_cfg.object_state_current_contact_time_threshold,
+    ).unsqueeze(-1)
+    if torch.any(no_contact):
+        non_contact_obs = torch.tensor(
+            obs_cfg.object_state_non_contact_obs,
+            device=object_state.device,
+            dtype=object_state.dtype,
+        ).unsqueeze(0)
+        if obs_cfg.object_state_scale is not None:
+            scale = torch.tensor(obs_cfg.object_state_scale, device=object_state.device, dtype=object_state.dtype).unsqueeze(0)
+            non_contact_obs = non_contact_obs * scale
+        object_state = torch.where(no_contact, non_contact_obs, object_state)
+    return object_state
+
+
+def build_policy_obs(
+    robot,
+    obs_state: RobotObsState,
+    command: torch.Tensor,
+    obs_cfg: PolicyObsCfg,
+    *,
+    payload=None,
+    payload_contact_sensor=None,
+) -> torch.Tensor:
     joint_pos_rel = robot.data.joint_pos - robot.data.default_joint_pos
     joint_vel_rel = robot.data.joint_vel
     base_ang_vel = robot.data.root_ang_vel_b * obs_cfg.base_ang_vel_scale
@@ -171,7 +253,22 @@ def build_policy_obs(robot, obs_state: RobotObsState, command: torch.Tensor, obs
     jvel_hist = _roll_history(obs_state.joint_vel_history, joint_vel_rel * obs_cfg.joint_vel_scale)
     act_hist = _roll_history(obs_state.action_history, obs_state.last_action)
 
-    return torch.cat([cmd_hist, ang_hist, grav_hist, jpos_hist, jvel_hist, act_hist], dim=-1)
+    obs_terms = [cmd_hist, ang_hist, grav_hist, jpos_hist, jvel_hist, act_hist]
+
+    if obs_cfg.include_object_state:
+        if payload is None:
+            raise ValueError("payload must be provided when building transport-teacher observations.")
+        if obs_state.object_state_history is None:
+            zeros_object = torch.zeros(1, 13, device=joint_pos_rel.device, dtype=joint_pos_rel.dtype)
+            obs_state.object_state_history = deque(
+                [zeros_object.clone() for _ in range(obs_cfg.history_length)],
+                maxlen=obs_cfg.history_length,
+            )
+        object_state = _object_state_in_robot_frame(robot, payload, payload_contact_sensor, obs_cfg)
+        object_hist = _roll_history(obs_state.object_state_history, object_state)
+        obs_terms.append(object_hist)
+
+    return torch.cat(obs_terms, dim=-1)
 
 
 def sample_shared_command(
@@ -298,12 +395,45 @@ def make_policy(
 ):
     from loco_rl.runners import OnPolicyRunner
 
-    obs_dim = policy_obs_cfg.history_length * (3 + 3 + 3 + num_actions + num_actions + num_actions)
+    per_step_obs_dim = 3 + 3 + 3 + num_actions + num_actions + num_actions
+    if policy_obs_cfg.include_object_state:
+        per_step_obs_dim += 13
+    obs_dim = policy_obs_cfg.history_length * per_step_obs_dim
     dummy_env = DummyPolicyEnv(obs_dim=obs_dim, num_actions=num_actions, device=device)
 
     agent_cfg = cli_args.parse_rsl_rl_cfg(policy_task, args_cli)
-    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
-    resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+    repo_root = Path(__file__).resolve().parents[2]
+
+    if args_cli.checkpoint is not None:
+        checkpoint_path = Path(args_cli.checkpoint)
+        if checkpoint_path.is_absolute() and checkpoint_path.exists():
+            resume_path = str(checkpoint_path)
+            log_dir = str(checkpoint_path.parent)
+            print(f"[INFO] Loading single-dog PPO checkpoint from absolute path: {resume_path}")
+            ppo_runner = OnPolicyRunner(dummy_env, agent_cfg.to_dict(), log_dir=log_dir, device=device)
+            ppo_runner.load(resume_path)
+            return ppo_runner.get_inference_policy(device=device)
+
+    experiment_name = args_cli.resume_experiment if args_cli.resume_experiment is not None else agent_cfg.experiment_name
+    log_root_path = repo_root / "logs" / "rsl_rl" / experiment_name
+    if not log_root_path.exists():
+        available_experiments = []
+        logs_root = repo_root / "logs" / "rsl_rl"
+        if logs_root.exists():
+            available_experiments = sorted(path.name for path in logs_root.iterdir() if path.is_dir())
+        raise FileNotFoundError(
+            "Could not find the single-dog policy experiment directory.\n"
+            f"Expected: {log_root_path}\n"
+            f"policy_task: {policy_task}\n"
+            f"experiment_name: {agent_cfg.experiment_name}\n"
+            f"resume_experiment: {args_cli.resume_experiment}\n"
+            "You can fix this by either:\n"
+            "1. passing --resume_experiment <actual_experiment_dir>, or\n"
+            "2. passing --checkpoint <absolute_path_to_model.pt>.\n"
+            f"Available experiment directories under {logs_root}: {available_experiments}"
+        )
+
+    resume_path = get_checkpoint_path(str(log_root_path), agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
 
     print(f"[INFO] Loading single-dog PPO checkpoint from: {resume_path}")
