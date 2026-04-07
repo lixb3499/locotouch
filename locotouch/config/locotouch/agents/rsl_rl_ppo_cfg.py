@@ -40,6 +40,7 @@ class VelCurPPORunnerCfg(LocomotionPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "locotouch_vel_cur"
 
+
 @configclass
 class ObjectTransportTeacherPPORunnerCfg(LocomotionPPORunnerCfg):
     def __post_init__(self):
@@ -279,8 +280,6 @@ class RandCylinderTransportTeacherPPORunnerCfg(ObjectTransportTeacherPPORunnerCf
 #     def __post_init__(self):
 #         super().__post_init__()
 #         self.experiment_name = "locotouch_rand_sphere_transport_teacher"
-
-
 
 
 

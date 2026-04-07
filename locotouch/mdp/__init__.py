@@ -4,7 +4,7 @@ from .observations import *
 from .commands import *
 from .actions import *
 from .rewards import *
+from .dual_dog import *
 from .curriculums import *
 from .terminations import *
 from .events import *
-

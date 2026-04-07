@@ -1,6 +1,12 @@
 import gymnasium as gym
 from .agents import rsl_rl_ppo_cfg, distillation_cfg
-from . import locomotion_env_cfg, locomotion_vel_cur_env_cfg, cylinder_transport_teacher_env_cfg, rand_cylinder_transport_teacher_env_cfg, object_transport_student_env_cfg
+from . import (
+    cylinder_transport_teacher_env_cfg,
+    locomotion_env_cfg,
+    locomotion_vel_cur_env_cfg,
+    object_transport_student_env_cfg,
+    rand_cylinder_transport_teacher_env_cfg,
+)
 
 
 # ----------------------------------- Locomotion -----------------------------------
@@ -145,5 +151,3 @@ python locotouch/scripts/train.py --task Isaac-RandCylinderTransportStudent_Sing
 
 python locotouch/scripts/play.py --task Isaac-RandCylinderTransportStudent_SingleBinaryTac_CNNRNN_Mon-LocoTouch-Play-v1 --num_envs=20
 """
-
-
