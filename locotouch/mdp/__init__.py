@@ -5,6 +5,7 @@ from .commands import *
 from .actions import *
 from .rewards import *
 from .dual_dog import *
+from .dual_dog_transport import *
 from .curriculums import *
 from .terminations import *
 from .events import *

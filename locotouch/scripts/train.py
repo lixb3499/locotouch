@@ -7,6 +7,18 @@
 
 """Launch Isaac Sim Simulator first."""
 
+# python locotouch/scripts/train.py \
+#     --task Isaac-DualDogTransport-LocoTouch-v1 \
+#     --num_envs=8 \
+#     --logger=tensorboard
+
+
+# python locotouch/scripts/train.py \
+#     --task Isaac-RandCylinderTransportTeacher-LocoTouch-v1 \
+#     --num_envs=1024 \
+#     --headless --logger=wandb
+
+
 import argparse
 import sys
 

@@ -201,12 +201,11 @@ class AdaptiveSymmetricGaitReward(ManagerTermBase):
 
     def _vel_tracking_score(self) -> torch.Tensor:
         # bonus is conditioned on the tracking accuracy
-        robot: RigidObject = self._env.scene["robot"]
         command_name = "base_velocity"
         vel_cmd = self._env.command_manager.get_command(command_name)
         non_zero_cmd = torch.norm(vel_cmd, dim=1) > 0.0
-        lin_vel_error = torch.linalg.norm(vel_cmd[:, :2]-robot.data.root_lin_vel_b[:, :2], dim=1)
-        ang_vel_error = torch.abs(vel_cmd[:, 2]-robot.data.root_ang_vel_b[:, 2])
+        lin_vel_error = torch.linalg.norm(vel_cmd[:, :2] - self.asset.data.root_lin_vel_b[:, :2], dim=1)
+        ang_vel_error = torch.abs(vel_cmd[:, 2] - self.asset.data.root_ang_vel_b[:, 2])
         lin_vel_error_proportion = torch.where(non_zero_cmd, lin_vel_error, 0.0)
         ang_vel_error_proportion = torch.where(non_zero_cmd, ang_vel_error, 0.0)
         vel_tracking_score = (torch.exp(-lin_vel_error_proportion / self.vel_tracking_exp_sigma) + torch.exp(-ang_vel_error_proportion / self.vel_tracking_exp_sigma)) / 2.0
@@ -601,4 +600,3 @@ def object_lose_contact_ngt(
     last_contact_time = contact_sensor.data.last_contact_time[:, sensor_cfg.body_ids] # type: ignore
     current_air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids] # type: ignore
     return torch.logical_and(last_contact_time > 0.0, current_air_time > 0.0).reshape(-1)
-
