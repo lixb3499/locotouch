@@ -217,8 +217,12 @@ class DualDogBenchmarkBaseEnvCfg(ManagerBasedRLEnvCfg):
 
         if getattr(self.scene, "robot_left_contact_sensor", None) is not None:
             self.scene.robot_left_contact_sensor.update_period = self.sim.dt
+        if getattr(self.scene, "robot_left_tactile_contact_sensor", None) is not None:
+            self.scene.robot_left_tactile_contact_sensor.update_period = self.sim.dt
         if getattr(self.scene, "robot_right_contact_sensor", None) is not None:
             self.scene.robot_right_contact_sensor.update_period = self.sim.dt
+        if getattr(self.scene, "robot_right_tactile_contact_sensor", None) is not None:
+            self.scene.robot_right_tactile_contact_sensor.update_period = self.sim.dt
         if getattr(self.scene, "payload_contact_sensor", None) is not None:
             self.scene.payload_contact_sensor.update_period = self.sim.dt
 

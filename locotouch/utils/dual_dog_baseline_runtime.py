@@ -1,3 +1,6 @@
+# python locotouch/scripts/play_dual_dog_baseline.py   --task Isaac-DualDogBenchmark-LocoTouch-Play-v1   --policy_task Isaac-RandCylinderTransportTeacher-LocoTouch-Play-v1   --resume_experiment locotouch_rand_cylinder_transport_teacher   --load_run 2025-09-01_21-03-58   --checkpoint model_15000.pt --payload_mass 0.5
+
+
 from __future__ import annotations
 
 import math
@@ -9,6 +12,8 @@ from pathlib import Path
 import torch
 
 import cli_args
+import locotouch.mdp as mdp
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
 from isaaclab.utils.math import quat_apply_inverse, quat_from_euler_xyz, quat_inv, quat_mul
@@ -51,6 +56,46 @@ class RobotObsState:
     joint_vel_history: deque[torch.Tensor]
     action_history: deque[torch.Tensor]
     object_state_history: deque[torch.Tensor] | None
+
+
+class _CommandManagerAdapter:
+    def __init__(self, command: torch.Tensor):
+        self._command = command
+
+    def get_command(self, _command_name: str | None = None) -> torch.Tensor:
+        return self._command
+
+
+class _ActionTermAdapter:
+    def __init__(self, raw_actions: torch.Tensor):
+        self.raw_actions = raw_actions
+
+
+class _ActionManagerAdapter:
+    def __init__(self, last_action: torch.Tensor):
+        self._term = _ActionTermAdapter(last_action)
+
+    def get_term(self, _action_name: str | None = None) -> _ActionTermAdapter:
+        return self._term
+
+
+class _SceneAdapter:
+    def __init__(self, robot, payload=None, payload_contact_sensor=None):
+        self._entities = {
+            "robot": robot,
+            "object": payload,
+        }
+        self.sensors = {"object_contact_sensor": payload_contact_sensor} if payload_contact_sensor is not None else {}
+
+    def __getitem__(self, name: str):
+        return self._entities[name]
+
+
+class _SingleDogObsEnvAdapter:
+    def __init__(self, robot, command: torch.Tensor, last_action: torch.Tensor, payload=None, payload_contact_sensor=None):
+        self.scene = _SceneAdapter(robot, payload=payload, payload_contact_sensor=payload_contact_sensor)
+        self.command_manager = _CommandManagerAdapter(command)
+        self.action_manager = _ActionManagerAdapter(last_action)
 
 
 class DummyPolicyEnv:
@@ -196,6 +241,23 @@ def _object_state_in_robot_frame(
     payload_contact_sensor,
     obs_cfg: PolicyObsCfg,
 ) -> torch.Tensor:
+    if payload is None:
+        if obs_cfg.object_state_non_contact_obs is not None:
+            object_state = torch.tensor(
+                obs_cfg.object_state_non_contact_obs,
+                device=robot.data.root_pos_w.device,
+                dtype=robot.data.root_pos_w.dtype,
+            ).unsqueeze(0)
+            if obs_cfg.object_state_scale is not None:
+                scale = torch.tensor(
+                    obs_cfg.object_state_scale,
+                    device=object_state.device,
+                    dtype=object_state.dtype,
+                ).unsqueeze(0)
+                object_state = object_state * scale
+            return object_state
+        return torch.zeros(1, 13, device=robot.data.root_pos_w.device, dtype=robot.data.root_pos_w.dtype)
+
     robot_quat_w = robot.data.root_quat_w
     pos_in_robot_frame = quat_apply_inverse(robot_quat_w, payload.data.root_pos_w - robot.data.root_pos_w)
     lin_vel_in_robot_frame = quat_apply_inverse(robot_quat_w, payload.data.root_lin_vel_w - robot.data.root_lin_vel_w)
@@ -241,30 +303,51 @@ def build_policy_obs(
     payload=None,
     payload_contact_sensor=None,
 ) -> torch.Tensor:
-    joint_pos_rel = robot.data.joint_pos - robot.data.default_joint_pos
-    joint_vel_rel = robot.data.joint_vel
-    base_ang_vel = robot.data.root_ang_vel_b * obs_cfg.base_ang_vel_scale
-    projected_gravity = robot.data.projected_gravity_b
+    obs_env = _SingleDogObsEnvAdapter(
+        robot,
+        command,
+        obs_state.last_action,
+        payload=payload,
+        payload_contact_sensor=payload_contact_sensor,
+    )
 
-    cmd_hist = _roll_history(obs_state.cmd_history, command)
+    command_term = mdp.generated_commands(obs_env, "base_velocity")
+    base_ang_vel = mdp.base_ang_vel(obs_env) * obs_cfg.base_ang_vel_scale
+    projected_gravity = mdp.projected_gravity(obs_env)
+    joint_pos_rel = mdp.joint_pos_rel(obs_env)
+    joint_vel_rel = mdp.joint_vel_rel(obs_env)
+    last_action = mdp.last_action(obs_env, "joint_pos")
+
+    cmd_hist = _roll_history(obs_state.cmd_history, command_term)
     ang_hist = _roll_history(obs_state.ang_vel_history, base_ang_vel)
     grav_hist = _roll_history(obs_state.gravity_history, projected_gravity)
     jpos_hist = _roll_history(obs_state.joint_pos_history, joint_pos_rel)
     jvel_hist = _roll_history(obs_state.joint_vel_history, joint_vel_rel * obs_cfg.joint_vel_scale)
-    act_hist = _roll_history(obs_state.action_history, obs_state.last_action)
+    act_hist = _roll_history(obs_state.action_history, last_action)
 
     obs_terms = [cmd_hist, ang_hist, grav_hist, jpos_hist, jvel_hist, act_hist]
 
     if obs_cfg.include_object_state:
-        if payload is None:
-            raise ValueError("payload must be provided when building transport-teacher observations.")
         if obs_state.object_state_history is None:
             zeros_object = torch.zeros(1, 13, device=joint_pos_rel.device, dtype=joint_pos_rel.dtype)
             obs_state.object_state_history = deque(
                 [zeros_object.clone() for _ in range(obs_cfg.history_length)],
                 maxlen=obs_cfg.history_length,
             )
-        object_state = _object_state_in_robot_frame(robot, payload, payload_contact_sensor, obs_cfg)
+        if payload is None:
+            object_state = _object_state_in_robot_frame(robot, payload, payload_contact_sensor, obs_cfg)
+        else:
+            object_state = mdp.object_state_in_robot_frame(
+                obs_env,
+                robot_cfg=SceneEntityCfg("robot"),
+                object_cfg=SceneEntityCfg("object"),
+                sensor_cfg=SceneEntityCfg("object_contact_sensor", body_names="Object"),
+                last_contact_time_threshold=obs_cfg.object_state_last_contact_time_threshold,
+                current_contact_time_threshold=obs_cfg.object_state_current_contact_time_threshold,
+                non_contact_obs=list(obs_cfg.object_state_non_contact_obs) if obs_cfg.object_state_non_contact_obs is not None else [0.0] * 13,
+                add_uniform_noise=False,
+                scale=list(obs_cfg.object_state_scale) if obs_cfg.object_state_scale is not None else 1.0,
+            )
         object_hist = _roll_history(obs_state.object_state_history, object_state)
         obs_terms.append(object_hist)
 
@@ -334,14 +417,15 @@ def reset_scene(
     env_ids = torch.tensor([0], dtype=torch.long, device=scene.device)
     reset_robot(scene["robot_left"], 0.0, -robot_separation_y / 2.0, env_ids)
     reset_robot(scene["robot_right"], 0.0, robot_separation_y / 2.0, env_ids)
-    reset_payload(
-        scene["payload"],
-        payload_center_x,
-        0.0,
-        payload_center_z,
-        payload_yaw_deg,
-        env_ids,
-    )
+    if "payload" in scene.keys():
+        reset_payload(
+            scene["payload"],
+            payload_center_x,
+            0.0,
+            payload_center_z,
+            payload_yaw_deg,
+            env_ids,
+        )
     scene.reset(env_ids)
     scene.write_data_to_sim()
     sim.step()
@@ -372,12 +456,18 @@ def build_scene_cfg(
     payload_mass: float,
     payload_center_x: float,
     payload_center_z: float,
+    disable_payload: bool = False,
 ):
     scene_cfg = task_env_cfg.scene
     left_x, _, left_z = scene_cfg.robot_left.init_state.pos
     right_x, _, right_z = scene_cfg.robot_right.init_state.pos
     scene_cfg.robot_left.init_state.pos = (left_x, -robot_separation_y / 2.0, left_z)
     scene_cfg.robot_right.init_state.pos = (right_x, robot_separation_y / 2.0, right_z)
+    if disable_payload:
+        scene_cfg.payload = None
+        scene_cfg.payload_contact_sensor = None
+        return scene_cfg
+
     scene_cfg.payload.spawn.radius = payload_radius
     scene_cfg.payload.spawn.height = payload_length
     scene_cfg.payload.spawn.mass_props.mass = payload_mass

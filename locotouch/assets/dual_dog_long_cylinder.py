@@ -110,8 +110,20 @@ class DualDogLongCylinderSceneCfg(InteractiveSceneCfg):
         history_length=3,
         track_air_time=True,
     )
+    robot_left_tactile_contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/RobotLeft/sensor_.*",
+        update_period=0.025,
+        history_length=3,
+        track_air_time=True,
+    )
     robot_right_contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/RobotRight/(?!sensor.*).*",
+        history_length=3,
+        track_air_time=True,
+    )
+    robot_right_tactile_contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/RobotRight/sensor_.*",
+        update_period=0.025,
         history_length=3,
         track_air_time=True,
     )
