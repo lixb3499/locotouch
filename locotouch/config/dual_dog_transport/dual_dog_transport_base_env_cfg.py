@@ -207,7 +207,7 @@ class DualDogTransportActionsCfg:
 
 @configclass
 class DualDogTransportRewardsCfg:
-    alive = RewardTermCfg(func=mdp.is_alive, weight=10.0)
+    alive = RewardTermCfg(func=mdp.is_alive, weight=6.0)
     track_shared_lin_vel = RewardTermCfg(
         func=mdp.shared_command_lin_tracking_reward,
         weight=3.0,
@@ -230,19 +230,28 @@ class DualDogTransportRewardsCfg:
     )
     support_point_height_balance = RewardTermCfg(
         func=mdp.payload_support_point_height_difference_penalty,
-        weight=2.0,
+        weight=4.0,
         params={"support_half_span": SUPPORT_HALF_SPAN},
     )
     support_point_velocity_balance = RewardTermCfg(
         func=mdp.payload_support_point_velocity_difference_penalty,
-        weight=1.0,
+        weight=2.0,
         params={"support_half_span": SUPPORT_HALF_SPAN},
+    )
+    robots_relative_position = RewardTermCfg(
+        func=mdp.robots_relative_position_penalty,
+        weight=3.0,
+        params={"target_relative_pos": (0.0, DEFAULT_DOG_SEPARATION_Y, 0.0)},
+    )
+    robots_relative_lin_vel = RewardTermCfg(
+        func=mdp.robots_relative_lin_vel_penalty,
+        weight=1.5,
     )
     payload_ang_vel = RewardTermCfg(func=mdp.payload_ang_vel_penalty, weight=0.5)
 
     left_gait = RewardTermCfg(
         func=mdp.AdaptiveSymmetricGaitReward,
-        weight=0.25,
+        weight=0.4,
         params={
             "asset_cfg": SceneEntityCfg("robot_left"),
             "sensor_cfg": SceneEntityCfg("robot_left_contact_sensor"),
@@ -263,7 +272,7 @@ class DualDogTransportRewardsCfg:
     )
     right_gait = RewardTermCfg(
         func=mdp.AdaptiveSymmetricGaitReward,
-        weight=0.25,
+        weight=0.4,
         params={
             "asset_cfg": SceneEntityCfg("robot_right"),
             "sensor_cfg": SceneEntityCfg("robot_right_contact_sensor"),
@@ -385,12 +394,12 @@ class DualDogTransportRewardsCfg:
 
     left_action_rate = RewardTermCfg(
         func=mdp.action_rate_term_ngt,
-        weight=-0.125,
+        weight=-0.08,
         params={"action_name": "joint_pos_left"},
     )
     right_action_rate = RewardTermCfg(
         func=mdp.action_rate_term_ngt,
-        weight=-0.125,
+        weight=-0.08,
         params={"action_name": "joint_pos_right"},
     )
     left_foot_slip = RewardTermCfg(
@@ -662,6 +671,10 @@ class DualDogTransportTerminationsCfg:
         func=mdp.payload_below_minimum_height,
         params={"minimum_height": 0.20, "payload_cfg": SceneEntityCfg("payload")},
     )
+    payload_endpoint_touch_ground = TerminationTermCfg(
+        func=mdp.payload_endpoint_below_minimum_height,
+        params={"rod_half_length": ROD_HALF_LENGTH, "minimum_height": 0.08, "payload_cfg": SceneEntityCfg("payload")},
+    )
 
 
 @configclass
@@ -672,14 +685,14 @@ class DualDogTransportCurriculumCfg:
             "command_name": "base_velocity",
             "command_maximum_ranges": [0.5, 0.25, math.pi / 4],
             "curriculum_bins": [12, 12, 12],
-            "reset_envs_episode_length": 0.9,
+            "reset_envs_episode_length": 0.75,
             "reward_name_lin": "track_shared_lin_vel",
             "reward_name_ang": "track_shared_ang_vel",
-            "error_threshold_lin": 0.08,
-            "error_threshold_ang": 0.12,
-            "repeat_times_lin": 2,
-            "repeat_times_ang": 2,
-            "max_distance_bins": 3,
+            "error_threshold_lin": 0.10,
+            "error_threshold_ang": 0.15,
+            "repeat_times_lin": 1,
+            "repeat_times_ang": 1,
+            "max_distance_bins": 4,
         },
     )
 
@@ -720,7 +733,7 @@ class DualDogTransportBaseEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material.dynamic_friction = 1.0
         self.sim.physics_material.friction_combine_mode = "multiply"
         self.sim.physics_material.restitution_combine_mode = "multiply"
-        self.sim.physx.gpu_max_rigid_patch_count = 5 * 2**16
+        self.sim.physx.gpu_max_rigid_patch_count = 2**20
 
         if getattr(self.scene, "robot_left_contact_sensor", None) is not None:
             self.scene.robot_left_contact_sensor.update_period = self.sim.dt

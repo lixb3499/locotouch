@@ -9,3 +9,4 @@ class DualDogTransportPPORunnerCfg(LocomotionPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "locotouch_dual_dog_transport_teacher"
         self.wandb_project = "Dual_Dog_Transport"
+        self.algorithm.entropy_coef = 0.003

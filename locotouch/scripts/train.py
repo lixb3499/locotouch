@@ -18,6 +18,7 @@
 #     --num_envs=1024 \
 #     --headless --logger=wandb
 
+# python locotouch/scripts/train.py     --task Isaac-DualDogTransport-LocoTouch-v1     --num_envs=2048 --logger=wandb    --headless     --video     --video_length 400     --video_interval 10000 --device cuda:0  --load_run 2026-04-09_12-40-29 --checkpoint model_18250.pt
 
 import argparse
 import sys

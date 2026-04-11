@@ -264,6 +264,26 @@ def robots_relative_lin_vel_in_left_frame(
     )
 
 
+def robots_relative_position_penalty(
+    env: ManagerBasedRLEnv,
+    target_relative_pos: tuple[float, float, float],
+    left_cfg: SceneEntityCfg = SceneEntityCfg("robot_left"),
+    right_cfg: SceneEntityCfg = SceneEntityCfg("robot_right"),
+) -> torch.Tensor:
+    relative_pos_b = robots_relative_pos_in_left_frame(env, left_cfg, right_cfg)
+    target = torch.tensor(target_relative_pos, device=relative_pos_b.device, dtype=relative_pos_b.dtype).unsqueeze(0)
+    return -torch.sum(torch.square(relative_pos_b - target), dim=1)
+
+
+def robots_relative_lin_vel_penalty(
+    env: ManagerBasedRLEnv,
+    left_cfg: SceneEntityCfg = SceneEntityCfg("robot_left"),
+    right_cfg: SceneEntityCfg = SceneEntityCfg("robot_right"),
+) -> torch.Tensor:
+    relative_lin_vel_b = robots_relative_lin_vel_in_left_frame(env, left_cfg, right_cfg)
+    return -torch.sum(torch.square(relative_lin_vel_b[:, :2]), dim=1)
+
+
 def shared_command_tracking_reward(
     env: ManagerBasedRLEnv,
     command_name: str = "base_velocity",
@@ -378,6 +398,41 @@ def payload_support_point_velocity_difference_penalty(
     return -torch.linalg.norm(support_lin_vel_w[:, 0] - support_lin_vel_w[:, 1], dim=1)
 
 
+def payload_support_point_min_height_penalty(
+    env: ManagerBasedRLEnv,
+    support_half_span: float,
+    minimum_height: float,
+    payload_cfg: SceneEntityCfg = SceneEntityCfg("payload"),
+) -> torch.Tensor:
+    payload: RigidObject = env.scene[payload_cfg.name]
+    support_offset_payload = torch.tensor(
+        [[0.0, -support_half_span, 0.0], [0.0, support_half_span, 0.0]],
+        device=payload.device,
+        dtype=payload.data.root_pos_w.dtype,
+    )
+    left_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        support_offset_payload[0].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    right_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        support_offset_payload[1].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    left_support_w = payload.data.root_pos_w + left_offset_world
+    right_support_w = payload.data.root_pos_w + right_offset_world
+    min_support_height = torch.minimum(left_support_w[:, 2], right_support_w[:, 2])
+    return -torch.square(torch.clamp(minimum_height - min_support_height, min=0.0))
+
+
+def payload_low_height_penalty(
+    env: ManagerBasedRLEnv,
+    minimum_height: float,
+    payload_cfg: SceneEntityCfg = SceneEntityCfg("payload"),
+) -> torch.Tensor:
+    payload: RigidObject = env.scene[payload_cfg.name]
+    return -torch.square(torch.clamp(minimum_height - payload.data.root_pos_w[:, 2], min=0.0))
+
+
 def payload_center_xy_deviation_penalty(
     env: ManagerBasedRLEnv,
     payload_cfg: SceneEntityCfg = SceneEntityCfg("payload"),
@@ -395,3 +450,55 @@ def payload_below_minimum_height(
 ) -> torch.Tensor:
     payload: RigidObject = env.scene[payload_cfg.name]
     return payload.data.root_pos_w[:, 2] < minimum_height
+
+
+def payload_support_point_below_minimum_height(
+    env: ManagerBasedRLEnv,
+    support_half_span: float,
+    minimum_height: float,
+    payload_cfg: SceneEntityCfg = SceneEntityCfg("payload"),
+) -> torch.Tensor:
+    payload: RigidObject = env.scene[payload_cfg.name]
+    support_offset_payload = torch.tensor(
+        [[0.0, -support_half_span, 0.0], [0.0, support_half_span, 0.0]],
+        device=payload.device,
+        dtype=payload.data.root_pos_w.dtype,
+    )
+    left_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        support_offset_payload[0].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    right_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        support_offset_payload[1].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    left_support_w = payload.data.root_pos_w + left_offset_world
+    right_support_w = payload.data.root_pos_w + right_offset_world
+    min_support_height = torch.minimum(left_support_w[:, 2], right_support_w[:, 2])
+    return min_support_height < minimum_height
+
+
+def payload_endpoint_below_minimum_height(
+    env: ManagerBasedRLEnv,
+    rod_half_length: float,
+    minimum_height: float,
+    payload_cfg: SceneEntityCfg = SceneEntityCfg("payload"),
+) -> torch.Tensor:
+    payload: RigidObject = env.scene[payload_cfg.name]
+    endpoint_offset_payload = torch.tensor(
+        [[0.0, -rod_half_length, 0.0], [0.0, rod_half_length, 0.0]],
+        device=payload.device,
+        dtype=payload.data.root_pos_w.dtype,
+    )
+    left_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        endpoint_offset_payload[0].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    right_offset_world = quat_apply(
+        payload.data.root_quat_w,
+        endpoint_offset_payload[1].unsqueeze(0).expand(payload.data.root_quat_w.shape[0], -1),
+    )
+    left_endpoint_w = payload.data.root_pos_w + left_offset_world
+    right_endpoint_w = payload.data.root_pos_w + right_offset_world
+    min_endpoint_height = torch.minimum(left_endpoint_w[:, 2], right_endpoint_w[:, 2])
+    return min_endpoint_height < minimum_height
