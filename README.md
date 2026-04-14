@@ -171,6 +171,52 @@ Verify the installation by playing the teacher and student policies:
   <img src="rm_figs/student_real.gif" width="48%">
 
 
+#### Dual-Dog Cooperative Transport
+- RL Training:
+  ```bash
+  python locotouch/scripts/train.py --task Isaac-DualDogTransport-LocoTouch-v1 --num_envs=512 --logger=wandb --headless --video --video_length 200 --video_interval 2000 --device cuda:0
+  ```
+- Resume Training:
+  ```bash
+  python locotouch/scripts/train.py --task Isaac-DualDogTransport-LocoTouch-v1 --num_envs=512 --logger=wandb --headless --video --video_length 200 --video_interval 2000 --device cuda:0 --resume --resume_experiment locotouch_dual_dog_transport_teacher --load_run 2026-04-11_13-54-55 --checkpoint model_29999.pt
+  ```
+- Play:
+  ```bash
+  python locotouch/scripts/play.py --task Isaac-DualDogTransport-LocoTouch-Play-v1 --num_envs 1 --load_run 2026-04-11_13-54-55 --checkpoint model_29999.pt --device cuda:0
+  ```
+- Play with video:
+  ```bash
+  python locotouch/scripts/play.py --task Isaac-DualDogTransport-LocoTouch-Play-v1 --num_envs 1 --headless --video --video_length 600 --device cuda:0 --load_run 2026-04-11_13-54-55 --checkpoint model_29999.pt
+  ```
+
+
+#### Dual-Dog Benchmark with Single-Dog Tactile Student
+- This benchmark uses two tactile LocoTouch robots, one shared velocity command, and a long rod with the same length as the dual-dog cooperative transport task. The payload mass is fixed at `3.0 kg`.
+- Play:
+  ```bash
+  python locotouch/scripts/play_dual_dog_student_baseline.py \
+    --task Isaac-DualDogBenchmark-LocoTouch-Play-v1 \
+    --student_task Isaac-RandCylinderTransportStudent_SingleBinaryTac_CNNRNN_Mon-LocoTouch-Play-v1 \
+    --log_dir_distill 2025-09-02_23-27-14 \
+    --checkpoint_distill model_7.pt \
+    --num_envs 1 \
+    --device cuda:0
+  ```
+- Play with video:
+  ```bash
+  python locotouch/scripts/play_dual_dog_student_baseline.py \
+    --task Isaac-DualDogBenchmark-LocoTouch-Play-v1 \
+    --student_task Isaac-RandCylinderTransportStudent_SingleBinaryTac_CNNRNN_Mon-LocoTouch-Play-v1 \
+    --log_dir_distill 2025-09-02_23-27-14 \
+    --checkpoint_distill model_7.pt \
+    --num_envs 1 \
+    --device cuda:0 \
+    --headless \
+    --video \
+    --video_length 600
+  ```
+
+
 
 ## Known Issues
 - Python is not installed:
